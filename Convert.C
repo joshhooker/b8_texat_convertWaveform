@@ -10,26 +10,17 @@ int main(int argc, char *argv[]) {
 
   // Home
   // TString PathToFiles = "/hd3/research/data/run0817a/rootM2R-WaveformModule/run";
-  TString PathToFiles = "/hd/research/data/run0817a/rootM2R-WaveformModule/run";
+  // TString PathToFiles = "/hd/research/data/run0817a/rootM2R-WaveformModule/run";
 
   // Mac Laptop
-  //TString PathToFiles = "/Users/joshhooker/Desktop/run";
+  TString PathToFiles = "/Users/joshhooker/Desktop/run";
 
-  PathToFiles += argv[1];
-  PathToFiles += ".root";
+  TChain *chain = new TChain("mfmData");
 
-  std::cout << PathToFiles << std::endl;
+  chain->Add(PathToFiles + "158_normal.root");
 
-  TFile *f = new TFile(PathToFiles);
-  TTree *inTree = (TTree*)f->Get("mfmData");
-
-  // TChain *chain = MakeChain();
-
-  Convert t(inTree);
+  Convert t(chain);
   t.Loop();
-
-  // delete tree;
-  // delete f;
 
   return 0;
 }
@@ -41,24 +32,13 @@ void Convert::Loop() {
 
     InitCanvas();
 
-    widths.push_back(4); widths.push_back(8);
-    widths.push_back(16); widths.push_back(32);
-    widths.push_back(64);
-
     TFile* file = new TFile("output.root", "recreate");
 
-    TTree* tree = new TTree("mfmData", "Experimental Event Data");
-    tree->Branch("mmMul", &fMMMul, "mmMul/I");
-    tree->Branch("mmCobo", fMMCobo, "mmCobo[mmMul]/I");
-    tree->Branch("mmAsad", fMMAsad, "mmAsad[mmMul]/I");
-    tree->Branch("mmAget", fMMAget, "mmAget[mmMul]/I");
-    tree->Branch("mmChan", fMMChan, "mmChan[mmMul]/I");
-    tree->Branch("mmTime", fMMTime, "mmTime[mmMul]/F");
-    tree->Branch("mmEnergy", fMMEnergy, "mmEnergy[mmMul]/F");
-    tree->Branch("mmPa", fMMPa, "mmPa[mmMul][5]/F");
+    auto* fpn = new TMultiGraph();
+    auto* waveform = new TMultiGraph();
 
     Long64_t nbytes = 0, nb = 0;
-    for(Long64_t jentry = 0; jentry < nentries; jentry++) {
+    for(Long64_t jentry = 10; jentry < 11; jentry++) {
     // for(Long64_t jentry = 0; jentry < 50; jentry++) {
         Long64_t ientry = LoadTree(jentry);
         if (ientry < 0) break;
@@ -72,96 +52,37 @@ void Convert::Loop() {
             Int_t asad = mmAsad[i];
             Int_t aget = mmAget[i];
             Int_t chan = mmChan[i];
-            Float_t time = mmTime[i];
-            Float_t energy = mmEnergy[i];
 
-            std::vector<Double_t> pa = GetPa(mmWaveform[i]);
+            if(cobo != 0) continue;
+            if(asad != 0) continue;
+            if(aget != 0) continue;
 
-            if(cobo == 1 && asad == 1 && aget == 3 && energy > 2800) {
-                std::pair<Float_t, Float_t> newCsI = FitCsI(mmWaveform[i]);
-                energy = newCsI.first;
-                time = newCsI.second;
+            std::cout << cobo << '\t' << asad << '\t' << aget << '\t' << chan << std::endl;
+
+            if(chan == 11 || chan ==  22 || chan == 45 || chan == 56) {
+              auto fpnGraph = new TGraph();
+
+              for(int j = 0; j < 512; j++) {
+                fpnGraph->SetPoint(j, j, mmWaveform[i][j]);
+              }
+              fpn->Add(fpnGraph);
+            }
+            else {
+              auto waveGraph = new TGraph();
+              for(int j = 0; j < 512; j++) {
+                waveGraph->SetPoint(j, j, mmWaveform[i][j]);
+              }
+              waveform->Add(waveGraph);
             }
 
-            fMMCobo[i] = cobo;
-            fMMAsad[i] = asad;
-            fMMAget[i] = aget;
-            fMMChan[i] = chan;
-            fMMTime[i] = time;
-            fMMEnergy[i] = energy;
-            for(UInt_t j = 0; j < 5; j++) {
-                fMMPa[i][j] = pa[j];
-            }
         }
-
-        fMMMul = mmMul;
-
-        tree->Fill();
     }
 
-    tree->Write();
+    fpn->SetName("fpn");
+    fpn->Write();
+
+    waveform->SetName("waveform");
+    waveform->Write();
+
     file->Close();
-}
-
-std::pair<Float_t, Float_t> Convert::FitCsI(Float_t* waveform) {
-    std::vector<Float_t> newWaveformX, newWaveformXErr, newWaveformY, newWaveformYErr;
-    for(UInt_t i = 100; i < 470; i++) {
-        if(waveform[i] > 1) {
-            newWaveformX.push_back(i);
-            newWaveformXErr.push_back(0);
-            newWaveformY.push_back(waveform[i]);
-            newWaveformYErr.push_back(sqrt(waveform[i]));
-        }
-    }
-
-    TF1* Sfunc = new TF1("shape", Shaper, newWaveformX[0], newWaveformX[newWaveformX.size() - 1], 6);
-    Sfunc->SetParNames("offset", "amplitude", "peakAt", "sigma", "power", "p2");
-    Sfunc->SetParameters(10, 500, 200, 130, 3, 0.2);
-    Sfunc->SetParLimits(1, 0, 10000);
-    Sfunc->SetParLimits(3, 80, 250);
-
-    TGraphErrors *gErr = new TGraphErrors(newWaveformX.size(), &newWaveformX[0], &newWaveformY[0], &newWaveformXErr[0], &newWaveformYErr[0]);
-
-    ROOT::Math::MinimizerOptions::SetDefaultMinimizer("Minuit2");
-    ROOT::Math::MinimizerOptions::SetDefaultMaxFunctionCalls(1000000);
-    ROOT::Math::MinimizerOptions::SetDefaultMaxIterations(1000000);
-    ROOT::Math::MinimizerOptions::SetDefaultTolerance(0.001);
-
-    gErr->Fit("shape", "QR");
-
-    Float_t maxWaveformX = 0;
-    Float_t maxWaveform = 0.;
-    for(UInt_t i = newWaveformX[0]; i < newWaveformX[newWaveformX.size() - 1]; i++) {
-        Float_t eval = Sfunc->Eval(i);
-        if(eval > maxWaveform) {
-            maxWaveform = eval;
-            maxWaveformX = i*40.;
-        }
-    }
-
-    delete Sfunc;
-    delete gErr;
-
-    return std::make_pair(maxWaveform, maxWaveformX);
-}
-
-std::vector<Double_t> Convert::GetPa(Float_t* waveform) {
-    std::vector<Double_t> waveform_;
-    Float_t maxValue = -1.;
-    for(UInt_t i = 0; i < 512; i++) {
-        if(waveform[i] > maxValue) {
-            maxValue = waveform[i];
-        }
-    }
-    for(UInt_t i = 0; i < 512; i++) {
-        waveform_.push_back(waveform[i]/maxValue);
-    }
-
-    WaveletNew* wavelet = new WaveletNew(waveform_, widths, true);
-    wavelet->CalcCWTFast();
-    std::vector<Double_t> scale = wavelet->GetScale();
-    std::vector<Double_t> pa = wavelet->GetPa();
-    delete wavelet;
-
-    return pa;
 }
